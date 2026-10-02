@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Browser Pixel Art to Excel Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 680px; margin: 30px auto; padding: 0 20px; color: #0f172a; background: #f8fafc; }
+    .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .control { margin-bottom: 14px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; }
+    input[type="number"], input[type="file"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 4px; }
+    .radio-group { background: #f1f5f9; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 16px; }
+    .radio-option { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; font-size: 0.85em; cursor: pointer; }
+    .radio-option:last-child { margin-bottom: 0; }
+    .radio-option input { margin-top: 2px; }
+    .preview-box { text-align: center; margin: 20px 0; background: #f1f5f9; padding: 16px; border-radius: 6px; border: 1px dashed #cbd5e1; }
+    canvas { image-rendering: pixelated; max-width: 100%; height: auto; border: 1px solid #94a3b8; background: white; }
+    button { background: #0284c7; color: white; border: none; padding: 12px 16px; font-weight: 600; border-radius: 6px; cursor: pointer; width: 100%; font-size: 1rem; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    #status { margin-top: 12px; font-size: 0.9em; color: #475569; text-align: center; }
+    .help-text { font-size: 0.75em; color: #64748b; margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>Excel Pixel Art Generator</h2>
+
+    <div class="control">
+      <label for="imageInput">1. Select Image</label>
+      <input type="file" id="imageInput" accept="image/*" onchange="handleImageSelect()">
+    </div>
+
+    <div class="grid">
+      <div class="control">
+        <label for="maxDim">Max Grid Dimension (Cells)</label>
+        <input type="number" id="maxDim" value="100" min="10" max="250" oninput="updatePreview()">
+        <div class="help-text">Longest side of output grid.</div>
+      </div>
+
+      <div class="control">
+        <label for="colorLevels">Color Depth (2–16)</label>
+        <input type="number" id="colorLevels" value="8" min="2" max="16" oninput="updatePreview()">
+        <div class="help-text">Color reduction palette size.</div>
+      </div>
+    </div>
+
+    <label>Aspect Ratio Strategy</label>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="aspectMode" value="grid" checked onchange="updatePreview()">
+        <div>
+          <strong>Match Image Aspect via Grid Count (Square Cells)</strong>
+          <div class="help-text">Cells are perfect 1:1 squares. Row and column counts scale to match image aspect ratio.</div>
+        </div>
+      </label>
+      <label class="radio-option">
+        <input type="radio" name="aspectMode" value="cell" onchange="updatePreview()">
+        <div>
+          <strong>Fit Image Aspect via Cell Dimensions</strong>
+          <div class="help-text">Cell width and height adjust dynamically so the total sheet matches the image aspect ratio exactly.</div>
+        </div>
+      </label>
+    </div>
+
+    <div class="grid">
+      <div class="control">
+        <label for="cellWidth">Excel Cell Width</label>
+        <input type="number" id="cellWidth" value="1.2" step="0.1" min="0.3" max="5" oninput="updatePreview()">
+        <div class="help-text">Column width units.</div>
+      </div>
+
+      <div class="control">
+        <label for="cellHeight">Calculated Row Height (pt)</label>
+        <input type="number" id="cellHeight" value="8" step="0.1" readonly style="background:#e2e8f0; color:#475569;">
+        <div class="help-text">Auto-derived from image ratio & column width.</div>
+      </div>
+    </div>
+
+    <!-- Live Preview Canvas -->
+    <div class="preview-box">
+      <label style="margin-bottom:8px;">Live Canvas Preview</label>
+      <canvas id="previewCanvas"></canvas>
+      <div id="dimInfo" class="help-text" style="margin-top:6px;">No image loaded</div>
+    </div>
+
+    <button id="generateBtn" onclick="exportToExcel()" disabled>Download Excel Spreadsheet</button>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    let currentImage = null;
+    let processedPixelData = null;
+    let processedGrid = { width: 0, height: 0 };
+    
+    // Base Excel conversion factor: ~6.67 points row height per 1 unit column width for square 1:1 cells
+    const EXCEL_BASE_RATIO = 6.67;
+
+    function handleImageSelect() {
+      const fileInput = document.getElementById('imageInput');
+      if (!fileInput.files.length) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          currentImage = img;
+          document.getElementById('generateBtn').disabled = false;
+          updatePreview();
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(fileInput.files[0]);
+    }
+
+    function updatePreview() {
+      if (!currentImage) return;
+
+      const maxDim = parseInt(document.getElementById('maxDim').value, 10) || 80;
+      const levels = parseInt(document.getElementById('colorLevels').value, 10) || 6;
+      const aspectMode = document.querySelector('input[name="aspectMode"]:checked').value;
+      const cellWidth = parseFloat(document.getElementById('cellWidth').value) || 1.2;
+
+      const imgAspect = currentImage.width / currentImage.height;
+
+      let width = currentImage.width;
+      let height = currentImage.height;
+
+      if (aspectMode === 'grid') {
+        // Mode 1: Adjust grid row/col counts to match image ratio with square cells
+        if (width > height) {
+          height = Math.round(maxDim / imgAspect);
+          width = maxDim;
+        } else {
+          width = Math.round(maxDim * imgAspect);
+          height = maxDim;
+        }
+        // Square cell height calculation
+        document.getElementById('cellHeight').value = (cellWidth * EXCEL_BASE_RATIO).toFixed(1);
+      } else {
+        // Mode 2: Fixed max dimension grid, calculate cell row height to stretch sheet to image aspect ratio
+        width = maxDim;
+        height = maxDim;
+
+        // Target cell aspect ratio = (Image Aspect) / (Grid Aspect)
+        const gridAspect = width / height;
+        const targetCellAspect = imgAspect / gridAspect;
+
+        // Derived row height = (Base Square Height) / Cell Aspect Ratio
+        const calculatedHeight = (cellWidth * EXCEL_BASE_RATIO) / targetCellAspect;
+        document.getElementById('cellHeight').value = calculatedHeight.toFixed(1);
+      }
+
+      processedGrid = { width, height };
+
+      // Sample image to canvas
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = width;
+      sampleCanvas.height = height;
+      const ctx = sampleCanvas.getContext('2d');
+      ctx.drawImage(currentImage, 0, 0, width, height);
+
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const data = imgData.data;
+
+      const step = 255 / (levels - 1);
+      for (let i = 0; i < data.length; i += 4) {
+        data[i]     = Math.round(Math.round(data[i] / step) * step);
+        data[i + 1] = Math.round(Math.round(data[i + 1] / step) * step);
+        data[i + 2] = Math.round(Math.round(data[i + 2] / step) * step);
+      }
+
+      processedPixelData = data;
+
+      const previewCanvas = document.getElementById('previewCanvas');
+      previewCanvas.width = width;
+      previewCanvas.height = height;
+      const pCtx = previewCanvas.getContext('2d');
+      pCtx.putImageData(imgData, 0, 0);
+
+      document.getElementById('dimInfo').textContent = 
+        `Image Ratio: ${imgAspect.toFixed(2)}:1 | Grid: ${width} × ${height} cells`;
+    }
+
+    async function exportToExcel() {
+      if (!processedPixelData) return;
+
+      const btn = document.getElementById('generateBtn');
+      const status = document.getElementById('status');
+      const cellWidth = parseFloat(document.getElementById('cellWidth').value) || 1.2;
+      const cellHeight = parseFloat(document.getElementById('cellHeight').value) || 8;
+      const { width, height } = processedGrid;
+
+      btn.disabled = true;
+      status.textContent = "Building Excel workbook...";
+
+      try {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Pixel Art');
+        worksheet.views = [{ showGridLines: true }];
+
+        for (let col = 1; col <= width; col++) {
+          worksheet.getColumn(col).width = cellWidth;
+        }
+
+        for (let y = 0; y < height; y++) {
+          const row = worksheet.getRow(y + 1);
+          row.height = cellHeight;
+
+          for (let x = 0; x < width; x++) {
+            const i = (y * width + x) * 4;
+            const r = processedPixelData[i];
+            const g = processedPixelData[i + 1];
+            const b = processedPixelData[i + 2];
+
+            const hexARGB = "FF" + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+            const cell = row.getCell(x + 1);
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: hexARGB }
+            };
+          }
+        }
+
+        status.textContent = "Generating file download...";
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `pixel_art_${width}x${height}.xlsx`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+
+        status.textContent = `Downloaded! ${width}x${height} grid generated.`;
+      } catch (err) {
+        console.error(err);
+        status.textContent = "Error generating Excel file.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
