@@ -10,7 +10,27 @@
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .control { margin-bottom: 14px; }
     label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; }
-    input[type="number"], input[type="file"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 4px; }
+    input[type="number"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 4px; }
+    
+    /* Dropzone Styling */
+    .dropzone {
+      border: 2px dashed #94a3b8;
+      border-radius: 8px;
+      padding: 24px 16px;
+      text-align: center;
+      background: #f8fafc;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: 16px;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: #0284c7;
+      background: #f0f9ff;
+    }
+    .dropzone-icon { font-size: 1.8rem; margin-bottom: 4px; }
+    .dropzone-text { font-size: 0.9em; color: #475569; }
+    .file-name { margin-top: 8px; font-weight: 600; font-size: 0.85em; color: #0284c7; word-break: break-all; }
+
     .radio-group { background: #f1f5f9; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 16px; }
     .radio-option { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; font-size: 0.85em; cursor: pointer; }
     .radio-option:last-child { margin-bottom: 0; }
@@ -28,9 +48,15 @@
   <div class="card">
     <h2>Excel Pixel Art Generator</h2>
 
+    <!-- Dropzone UI -->
     <div class="control">
-      <label for="imageInput">1. Select Image</label>
-      <input type="file" id="imageInput" accept="image/*" onchange="handleImageSelect()">
+      <label>1. Select or Drop Image</label>
+      <div id="dropzone" class="dropzone" onclick="document.getElementById('imageInput').click()">
+        <div class="dropzone-icon">🖼️</div>
+        <div class="dropzone-text"><strong>Drag & drop an image here</strong> or click to browse</div>
+        <div id="fileName" class="file-name"></div>
+      </div>
+      <input type="file" id="imageInput" accept="image/*" style="display:none;" onchange="if(this.files.length) handleFileSelect(this.files[0])">
     </div>
 
     <div class="grid">
@@ -98,9 +124,40 @@
     // Base Excel conversion factor: ~6.67 points row height per 1 unit column width for square 1:1 cells
     const EXCEL_BASE_RATIO = 6.67;
 
-    function handleImageSelect() {
-      const fileInput = document.getElementById('imageInput');
-      if (!fileInput.files.length) return;
+    // --- Dropzone Drag & Drop Listeners ---
+    const dropzone = document.getElementById('dropzone');
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add('dragover');
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove('dragover');
+      }, false);
+    });
+
+    dropzone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files && files.length > 0) {
+        handleFileSelect(files[0]);
+      }
+    }, false);
+
+    function handleFileSelect(file) {
+      if (!file || !file.type.startsWith('image/')) {
+        alert("Please select a valid image file.");
+        return;
+      }
+
+      document.getElementById('fileName').textContent = `Selected File: ${file.name}`;
 
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -112,7 +169,7 @@
         };
         img.src = e.target.result;
       };
-      reader.readAsDataURL(fileInput.files[0]);
+      reader.readAsDataURL(file);
     }
 
     function updatePreview() {
@@ -129,7 +186,6 @@
       let height = currentImage.height;
 
       if (aspectMode === 'grid') {
-        // Mode 1: Adjust grid row/col counts to match image ratio with square cells
         if (width > height) {
           height = Math.round(maxDim / imgAspect);
           width = maxDim;
@@ -137,25 +193,20 @@
           width = Math.round(maxDim * imgAspect);
           height = maxDim;
         }
-        // Square cell height calculation
         document.getElementById('cellHeight').value = (cellWidth * EXCEL_BASE_RATIO).toFixed(1);
       } else {
-        // Mode 2: Fixed max dimension grid, calculate cell row height to stretch sheet to image aspect ratio
         width = maxDim;
         height = maxDim;
 
-        // Target cell aspect ratio = (Image Aspect) / (Grid Aspect)
         const gridAspect = width / height;
         const targetCellAspect = imgAspect / gridAspect;
 
-        // Derived row height = (Base Square Height) / Cell Aspect Ratio
         const calculatedHeight = (cellWidth * EXCEL_BASE_RATIO) / targetCellAspect;
         document.getElementById('cellHeight').value = calculatedHeight.toFixed(1);
       }
 
       processedGrid = { width, height };
 
-      // Sample image to canvas
       const sampleCanvas = document.createElement('canvas');
       sampleCanvas.width = width;
       sampleCanvas.height = height;
